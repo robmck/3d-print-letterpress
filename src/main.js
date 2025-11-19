@@ -9,25 +9,27 @@ var JSM = require("../lib/jsmodeler.js");
 var segmentElem = require("../lib/segmentelem.js");
 var ContourPolygonToPrisms = require("../lib/contourpolygontoprisms.js");
 
-var args = process.argv.slice(2);
-var file = args[0];
-var pointsize = args[1] ? parseFloat(args[1]) : 72;
-if (isNaN(pointsize) || pointsize <= 0) {
-    pointsize = 72;
-}
-var ch = args[2] ? dedupe(args[2]) : 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+function run(argv) {
+    var args = Array.isArray(argv) ? argv.slice() : process.argv.slice(2);
+    var file = args[0];
+    var pointsize = args[1] ? parseFloat(args[1]) : 72;
+    if (isNaN(pointsize) || pointsize <= 0) {
+        pointsize = 72;
+    }
+    var ch = args[2] ? dedupe(args[2]) : 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
-if (args.length == 0) {
-    console.log("Usage: 3d-print-letterpress type-file [point-size [glyphs]]");
-    console.log("Usage: 3d-print-letterpress svg-file");
-}
-else {
-    var ext = path.extname(file).toLowerCase();
+    if (args.length === 0) {
+        console.log("Usage: 3d-print-letterpress type-file [point-size [glyphs]]");
+        console.log("Usage: 3d-print-letterpress svg-file");
+        return;
+    }
+
+    var ext = file ? path.extname(file).toLowerCase() : '';
     if (ext == '.otf' || ext == '.ttf') {
         // parse type file
         opentype.load(file, function (err, font) {
             if (err) {
-                console.error("Failed to load font '" + args[0] + "': " + err.message);
+                console.error("Failed to load font '" + file + "': " + err.message);
                 return;
             }
 
@@ -51,7 +53,7 @@ else {
                     continue;
                 }
                 var glyphName = formatGlyphName(glyphs[a]);
-                writeTypeSTLForModel(model, capTopZ, path.basename(file, ext), glyphName);
+                writeTypeSTLForModel(model, capTopZ, path.basename(file, ext), glyphName, pointsize);
             }
         });
     }
@@ -102,7 +104,7 @@ else {
                 return;
             }
             pointsize = Math.ceil(bboxdims.max.z - bboxdims.min.z + 1);
-            writeTypeSTLForModel(model, bboxdims.max.z, 'svg_path', path.basename(file, ext));
+            writeTypeSTLForModel(model, bboxdims.max.z, 'svg_path', path.basename(file, ext), pointsize);
         });
     }
     else {
@@ -119,7 +121,7 @@ maxHeightZ - the maximum z coordinate of the typeface's bounding box (i.e. highe
 faceName - the name of the typeface (ex. Gotham-Book)
 glyphName - the name of the glyph (ex. A)
 */
-function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName) {
+function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPointSize) {
     var bboxdims = getModelBoundingBox(model);
     if (!bboxdims) {
         console.warn("Skipping glyph '" + glyphName + "' due to missing bounding box.");
@@ -131,13 +133,13 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName) {
     var typeHigh = 0.918 * 72;
     var faceHeight = 2;
     var topPadding = 0.5;
-    var base = JSM.GenerateCuboid(bboxWidthX, typeHigh - faceHeight, pointsize);
+    var base = JSM.GenerateCuboid(bboxWidthX, typeHigh - faceHeight, outputPointSize);
 
     var alignBaseToLetter = JSM.TranslationTransformation (
         new JSM.Coord (
             bboxdims.min.x + bboxWidthX / 2,
             bboxdims.max.y - (typeHigh / 2) - (faceHeight / 2),
-            maxHeightZ - pointsize / 2 + topPadding
+            maxHeightZ - outputPointSize / 2 + topPadding
         ));
     base.Transform (alignBaseToLetter);
 
@@ -146,7 +148,7 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName) {
     var alignNickToBase = new JSM.Coord (
             bboxdims.min.x + bboxWidthX / 2,
             bboxdims.max.y - (3 * typeHigh / 4),
-            maxHeightZ - pointsize
+            maxHeightZ - outputPointSize
         );
     nick.Transform(JSM.TranslationTransformation (alignNickToBase));
     base = JSM.BooleanOperation ('Difference', base, nick);
@@ -167,7 +169,7 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName) {
     var stl = JSM.ExportModelToStl(model);
 
     var dirname = faceName + "STL";
-    var filename = faceName + pointsize + "pt" + glyphName + ".stl";
+    var filename = faceName + outputPointSize + "pt" + glyphName + ".stl";
 
     fs.mkdir(dirname, { recursive: true }, function (mkdirErr) {
         if (mkdirErr) {
@@ -372,3 +374,18 @@ function dedupe(s) {
     }
     return firsts;
 }
+
+if (require.main === module) {
+    run();
+}
+
+module.exports = {
+    run: run,
+    _internals: {
+        dedupe: dedupe,
+        mapSvgCommand: mapSvgCommand,
+        convertSvgPathToCommands: convertSvgPathToCommands,
+        mergeModels: mergeModels,
+        getModelBoundingBox: getModelBoundingBox
+    }
+};
