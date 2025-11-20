@@ -215,7 +215,7 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPoin
 
     var typeHigh = 0.918 * 72;
     var faceHeight = 2;
-    var topPadding = 0.5;
+    var topPadding = 0;
     var base = JSM.GenerateCuboid(slugWidthX, typeHigh - faceHeight, slugHeight);
 
     var alignBaseToLetter = JSM.TranslationTransformation (
