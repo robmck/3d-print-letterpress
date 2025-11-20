@@ -20,6 +20,20 @@ test('dedupe removes repeated characters while preserving order', () => {
     assert.strictEqual(internals.dedupe('xyz'), 'xyz');
 });
 
+test('extractLineGapOption parses inline and spaced arguments', () => {
+    const inline = internals.extractLineGapOption(['--line-gap=120', 'font.otf']);
+    assert.strictEqual(inline.lineGap, 120);
+    assert.deepStrictEqual(inline.filteredArgs, ['font.otf']);
+
+    const spaced = internals.extractLineGapOption(['--line-gap', '300', 'font.ttf']);
+    assert.strictEqual(spaced.lineGap, 300);
+    assert.deepStrictEqual(spaced.filteredArgs, ['font.ttf']);
+
+    const invalid = internals.extractLineGapOption(['--line-gap', 'NaN', 'font.ttf']);
+    assert.strictEqual(invalid.lineGap, null);
+    assert.deepStrictEqual(invalid.filteredArgs, ['font.ttf']);
+});
+
 test('getModelBoundingBox merges bounding boxes across bodies', () => {
     const boxes = [
         { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
@@ -238,6 +252,31 @@ test('computeFontVerticalMetrics extends to glyph bounds when outlines exceed me
     const bounds = { minZ: -15, maxZ: 55 };
     const metrics = internals.computeFontVerticalMetrics(font, 48, bounds);
     assert.deepStrictEqual(metrics, { top: 55, bottom: -15, height: 70 });
+});
+
+test('computeFontVerticalMetrics honors explicit line gap override', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            os2: {
+                fsSelection: 0x80,
+                sTypoAscender: 900,
+                sTypoDescender: -100,
+                sTypoLineGap: 0
+            }
+        }
+    };
+    const pointSize = 72;
+    const override = 400; // font units
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null, { lineGapOverride: override });
+    const asc = 900;
+    const desc = -100;
+    const range = asc - desc + override; // 1400
+    const scale = pointSize / range;
+    const expectedLineGapPhysical = override * scale;
+    assertApproxEqual(metrics.height, pointSize);
+    assertApproxEqual(metrics.top, (asc * scale) + (expectedLineGapPhysical / 2));
+    assertApproxEqual(metrics.bottom, (desc * scale) - (expectedLineGapPhysical / 2));
 });
 
 test('getScalingRangeForFont includes line gap when provided', () => {

@@ -14,6 +14,10 @@ var POINT_TO_MM = MILLIMETERS_PER_INCH / POINTS_PER_INCH;
 
 function run(argv) {
     var args = Array.isArray(argv) ? argv.slice() : process.argv.slice(2);
+    var parsedOptions = extractLineGapOption(args);
+    var lineGapOverride = parsedOptions.lineGap;
+    args = parsedOptions.filteredArgs;
+
     var file = args[0];
     var pointsize = args[1] ? parseFloat(args[1]) : 72;
     if (isNaN(pointsize) || pointsize <= 0) {
@@ -22,7 +26,7 @@ function run(argv) {
     var ch = args[2] ? dedupe(args[2]) : 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
     if (args.length === 0) {
-        console.log("Usage: 3d-print-letterpress type-file [point-size [glyphs]]");
+        console.log("Usage: 3d-print-letterpress type-file [point-size [glyphs]] [--line-gap=value]");
         console.log("Usage: 3d-print-letterpress svg-file");
         return;
     }
@@ -43,7 +47,14 @@ function run(argv) {
             }
             var baseVerticalMetrics = extractFontVerticalMetrics(font);
             var unitsPerEm = font.unitsPerEm || 1000;
-            var scalingRange = getScalingRangeForFont(baseVerticalMetrics, unitsPerEm);
+            var sanitizedLineGapOverride = (typeof lineGapOverride === 'number' && isFinite(lineGapOverride))
+                ? Math.max(0, lineGapOverride)
+                : null;
+            var scalingRange = getScalingRangeForFont({
+                ascender: baseVerticalMetrics.ascender,
+                descender: baseVerticalMetrics.descender,
+                lineGap: sanitizedLineGapOverride !== null ? sanitizedLineGapOverride : baseVerticalMetrics.lineGap
+            }, unitsPerEm);
             var glyphScale = scalingRange > 0 ? (pointsize / scalingRange) : (pointsize / unitsPerEm);
             var glyphRenderSize = glyphScale * unitsPerEm;
 
@@ -99,9 +110,11 @@ function run(argv) {
                 return;
             }
 
-            var verticalMetrics = computeFontVerticalMetrics(font, pointsize, aggregatedLetterBounds, {
-                metricsRange: scalingRange
-            });
+            var verticalOptions = { metricsRange: scalingRange };
+            if (sanitizedLineGapOverride !== null) {
+                verticalOptions.lineGapOverride = sanitizedLineGapOverride;
+            }
+            var verticalMetrics = computeFontVerticalMetrics(font, pointsize, aggregatedLetterBounds, verticalOptions);
 
             for (var entryIndex = 0; entryIndex < preparedGlyphs.length; entryIndex++) {
                 var entry = preparedGlyphs[entryIndex];
@@ -433,7 +446,12 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds, options) {
 
     var vertical = extractFontVerticalMetrics(font);
     var metricsRange = null;
-    var lineGap = vertical && typeof vertical.lineGap === 'number' ? vertical.lineGap : 0;
+    var overrideLineGap = options && typeof options.lineGapOverride === 'number' && isFinite(options.lineGapOverride)
+        ? Math.max(0, options.lineGapOverride)
+        : null;
+    var lineGap = overrideLineGap !== null
+        ? overrideLineGap
+        : (vertical && typeof vertical.lineGap === 'number' ? Math.max(0, vertical.lineGap) : 0);
     if (options && typeof options.metricsRange === 'number' && options.metricsRange > 0) {
         metricsRange = options.metricsRange;
     } else if (vertical && typeof vertical.ascender === 'number' && typeof vertical.descender === 'number') {
@@ -489,7 +507,7 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds, options) {
 
 function getScalingRangeForFont(verticalMetrics, fallbackUnitsPerEm) {
     if (verticalMetrics && typeof verticalMetrics.ascender === 'number' && typeof verticalMetrics.descender === 'number') {
-        var lineGap = typeof verticalMetrics.lineGap === 'number' ? verticalMetrics.lineGap : 0;
+        var lineGap = typeof verticalMetrics.lineGap === 'number' ? Math.max(0, verticalMetrics.lineGap) : 0;
         var range = verticalMetrics.ascender - verticalMetrics.descender + lineGap;
         if (isFinite(range) && range > 0) {
             return range;
@@ -667,6 +685,41 @@ function dedupe(s) {
     return firsts;
 }
 
+function extractLineGapOption(args) {
+    var result = {
+        filteredArgs: [],
+        lineGap: null
+    };
+    if (!Array.isArray(args)) {
+        return result;
+    }
+
+    for (var i = 0; i < args.length; i++) {
+        var current = args[i];
+        if (typeof current === 'string' && current.indexOf('--line-gap') === 0) {
+            var valueString = null;
+            var equalsIndex = current.indexOf('=');
+            if (equalsIndex !== -1) {
+                valueString = current.substring(equalsIndex + 1);
+            } else if (i + 1 < args.length) {
+                valueString = args[i + 1];
+                i++;
+            }
+
+            if (valueString !== null && valueString.length > 0) {
+                var parsedValue = parseFloat(valueString);
+                if (isFinite(parsedValue)) {
+                    result.lineGap = parsedValue;
+                }
+            }
+            continue;
+        }
+        result.filteredArgs.push(current);
+    }
+
+    return result;
+}
+
 if (require.main === module) {
     run();
 }
@@ -682,6 +735,7 @@ module.exports = {
         computeSlugBounds: computeSlugBounds,
         computeFontVerticalMetrics: computeFontVerticalMetrics,
         getScalingRangeForFont: getScalingRangeForFont,
+        extractLineGapOption: extractLineGapOption,
         applyUniformScale: applyUniformScale,
         createUniformScaleTransformation: createUniformScaleTransformation,
         POINT_TO_MM: POINT_TO_MM
