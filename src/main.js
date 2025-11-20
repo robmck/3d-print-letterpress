@@ -40,6 +40,8 @@ function run(argv) {
             }
 
             var capTopZ = estimateCapHeight(font, pointsize);
+            var preparedGlyphs = [];
+            var aggregatedLetterBounds = null;
 
             for (var a = 0, b = glyphs.length; a < b; a++) {
                 var glyphPath = glyphs[a].getPath(0, 0, pointsize);
@@ -66,15 +68,43 @@ function run(argv) {
                     font.unitsPerEm,
                     pointsize
                 );
+                preparedGlyphs.push({
+                    model: model,
+                    glyphName: glyphName,
+                    letterBounds: letterBounds,
+                    slugBounds: slugBounds
+                });
+
+                if (!aggregatedLetterBounds) {
+                    aggregatedLetterBounds = {
+                        minZ: letterBounds.min.z,
+                        maxZ: letterBounds.max.z
+                    };
+                } else {
+                    aggregatedLetterBounds.minZ = Math.min(aggregatedLetterBounds.minZ, letterBounds.min.z);
+                    aggregatedLetterBounds.maxZ = Math.max(aggregatedLetterBounds.maxZ, letterBounds.max.z);
+                }
+            }
+
+            if (!preparedGlyphs.length) {
+                console.error("No printable glyphs available for character set '" + ch + "'.");
+                return;
+            }
+
+            var verticalMetrics = computeFontVerticalMetrics(font, pointsize, aggregatedLetterBounds);
+
+            for (var entryIndex = 0; entryIndex < preparedGlyphs.length; entryIndex++) {
+                var entry = preparedGlyphs[entryIndex];
                 writeTypeSTLForModel(
-                    model,
+                    entry.model,
                     capTopZ,
                     path.basename(file, ext),
-                    glyphName,
+                    entry.glyphName,
                     pointsize,
                     {
-                        letterBounds: letterBounds,
-                        slugBounds: slugBounds
+                        letterBounds: entry.letterBounds,
+                        slugBounds: entry.slugBounds,
+                        verticalMetrics: verticalMetrics
                     }
                 );
             }
@@ -162,16 +192,27 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPoin
     }
     var baseCenterX = slugMinX + slugWidthX / 2;
 
+    var verticalMetrics = resolvedOptions.verticalMetrics;
+    var slugHeight = verticalMetrics && typeof verticalMetrics.height === 'number' && verticalMetrics.height > 0
+        ? verticalMetrics.height
+        : outputPointSize;
+    var slugTop = verticalMetrics && typeof verticalMetrics.top === 'number'
+        ? verticalMetrics.top
+        : maxHeightZ;
+    var slugBottom = verticalMetrics && typeof verticalMetrics.bottom === 'number'
+        ? verticalMetrics.bottom
+        : (slugTop - slugHeight);
+
     var typeHigh = 0.918 * 72;
     var faceHeight = 2;
     var topPadding = 0.5;
-    var base = JSM.GenerateCuboid(slugWidthX, typeHigh - faceHeight, outputPointSize);
+    var base = JSM.GenerateCuboid(slugWidthX, typeHigh - faceHeight, slugHeight);
 
     var alignBaseToLetter = JSM.TranslationTransformation (
         new JSM.Coord (
             baseCenterX,
             bboxdims.max.y - (typeHigh / 2) - (faceHeight / 2),
-            maxHeightZ - outputPointSize / 2 + topPadding
+            slugTop - slugHeight / 2 + topPadding
         ));
     base.Transform (alignBaseToLetter);
 
@@ -180,7 +221,7 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPoin
     var alignNickToBase = new JSM.Coord (
             baseCenterX,
             bboxdims.max.y - (3 * typeHigh / 4),
-            maxHeightZ - outputPointSize
+            slugBottom
         );
     nick.Transform(JSM.TranslationTransformation (alignNickToBase));
     base = JSM.BooleanOperation ('Difference', base, nick);
@@ -291,6 +332,106 @@ function computeSlugBounds(letterBounds, glyphMetrics, advanceWidth, unitsPerEm,
     return {
         minX: slugLeft,
         width: slugRight - slugLeft
+    };
+}
+
+function extractFontVerticalMetrics(font) {
+    if (!font) {
+        return { ascender: null, descender: null };
+    }
+    var tables = font.tables || {};
+    var os2 = tables.os2 || {};
+    var hhea = tables.hhea || {};
+    var head = tables.head || {};
+
+    var ascender = null;
+    var descender = null;
+
+    var fsSelection = typeof os2.fsSelection === 'number' ? os2.fsSelection : null;
+    var useTypoMetrics = !!(fsSelection && (fsSelection & 0x80));
+    var hasTypo = typeof os2.sTypoAscender === 'number' && typeof os2.sTypoDescender === 'number';
+    var hasWin = typeof os2.usWinAscent === 'number' && typeof os2.usWinDescent === 'number';
+
+    if (hasTypo || hasWin) {
+        if (useTypoMetrics && hasTypo) {
+            ascender = os2.sTypoAscender;
+            descender = os2.sTypoDescender;
+        } else if (!useTypoMetrics && hasWin) {
+            ascender = os2.usWinAscent;
+            descender = -os2.usWinDescent;
+        } else if (hasTypo) {
+            ascender = os2.sTypoAscender;
+            descender = os2.sTypoDescender;
+        } else if (hasWin) {
+            ascender = os2.usWinAscent;
+            descender = -os2.usWinDescent;
+        }
+    }
+
+    if (ascender === null && typeof hhea.ascender === 'number') {
+        ascender = hhea.ascender;
+    }
+    if (descender === null && typeof hhea.descender === 'number') {
+        descender = hhea.descender;
+    }
+
+    if (ascender === null && typeof head.yMax === 'number') {
+        ascender = head.yMax;
+    }
+    if (descender === null && typeof head.yMin === 'number') {
+        descender = head.yMin;
+    }
+
+    return {
+        ascender: ascender,
+        descender: descender
+    };
+}
+
+function computeFontVerticalMetrics(font, pointSize, glyphBounds) {
+    if (!font || !pointSize) {
+        return null;
+    }
+    var unitsPerEm = font.unitsPerEm || 1000;
+    if (!unitsPerEm || !isFinite(unitsPerEm)) {
+        return null;
+    }
+    var scale = pointSize / unitsPerEm;
+    if (!isFinite(scale) || scale <= 0) {
+        return null;
+    }
+
+    var vertical = extractFontVerticalMetrics(font);
+    var top = typeof vertical.ascender === 'number' ? vertical.ascender * scale : null;
+    var bottom = typeof vertical.descender === 'number' ? vertical.descender * scale : null;
+
+    if (glyphBounds) {
+        if (top === null) {
+            top = glyphBounds.maxZ;
+        } else if (typeof glyphBounds.maxZ === 'number') {
+            top = Math.max(top, glyphBounds.maxZ);
+        }
+
+        if (bottom === null) {
+            bottom = glyphBounds.minZ;
+        } else if (typeof glyphBounds.minZ === 'number') {
+            bottom = Math.min(bottom, glyphBounds.minZ);
+        }
+    }
+
+    if (top === null || bottom === null) {
+        return null;
+    }
+
+    var height = top - bottom;
+    if (!isFinite(height) || height <= 0) {
+        return null;
+    }
+
+    return {
+        top: top,
+        bottom: bottom,
+        height: height
     };
 }
 
@@ -447,6 +588,7 @@ module.exports = {
         convertSvgPathToCommands: convertSvgPathToCommands,
         mergeModels: mergeModels,
         getModelBoundingBox: getModelBoundingBox,
-        computeSlugBounds: computeSlugBounds
+        computeSlugBounds: computeSlugBounds,
+        computeFontVerticalMetrics: computeFontVerticalMetrics
     }
 };

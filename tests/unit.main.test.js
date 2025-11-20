@@ -76,3 +76,68 @@ test('computeSlugBounds returns null when required inputs are missing', () => {
     assert.strictEqual(internals.computeSlugBounds(letterBounds, null, 400, 1000, 1000), null);
     assert.strictEqual(internals.computeSlugBounds(null, {}, 400, 1000, 1000), null);
 });
+
+test('computeFontVerticalMetrics honors USE_TYPO_METRICS bit from OS/2', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            os2: {
+                fsSelection: 0x80,
+                sTypoAscender: 900,
+                sTypoDescender: -200,
+                usWinAscent: 1100,
+                usWinDescent: 450
+            }
+        }
+    };
+    const bounds = { minZ: -10, maxZ: 30 };
+    const metrics = internals.computeFontVerticalMetrics(font, 60, bounds);
+    assert.deepStrictEqual(metrics, { top: 54, bottom: -12, height: 66 });
+});
+
+test('computeFontVerticalMetrics uses usWin metrics when USE_TYPO_METRICS is unset', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            os2: {
+                fsSelection: 0,
+                sTypoAscender: 900,
+                sTypoDescender: -200,
+                usWinAscent: 1100,
+                usWinDescent: 450
+            }
+        }
+    };
+    const bounds = { minZ: -20, maxZ: 50 };
+    const metrics = internals.computeFontVerticalMetrics(font, 50, bounds);
+    assert.deepStrictEqual(metrics, { top: 55, bottom: -22.5, height: 77.5 });
+});
+
+test('computeFontVerticalMetrics falls back to hhea ascender/descender when OS/2 missing', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            hhea: { ascender: 800, descender: -300 }
+        }
+    };
+    const metrics = internals.computeFontVerticalMetrics(font, 40, null);
+    assert.deepStrictEqual(metrics, { top: 32, bottom: -12, height: 44 });
+});
+
+test('computeFontVerticalMetrics falls back to head yMax/yMin when hhea missing', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            head: { yMax: 700, yMin: -200 }
+        }
+    };
+    const metrics = internals.computeFontVerticalMetrics(font, 10, null);
+    assert.deepStrictEqual(metrics, { top: 7, bottom: -2, height: 9 });
+});
+
+test('computeFontVerticalMetrics falls back to glyph bounds when metrics missing', () => {
+    const font = { unitsPerEm: 1000 };
+    const bounds = { minZ: -5, maxZ: 32 };
+    const metrics = internals.computeFontVerticalMetrics(font, 72, bounds);
+    assert.deepStrictEqual(metrics, { top: 32, bottom: -5, height: 37 });
+});
