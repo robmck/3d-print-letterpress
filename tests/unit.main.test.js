@@ -56,3 +56,23 @@ test('mapSvgCommand supports multiple draw commands and fallbacks', () => {
     assert.strictEqual(internals.mapSvgCommand({}), null);
     assert.strictEqual(internals.mapSvgCommand({ code: 'X' }), null);
 });
+
+test('computeSlugBounds expands slug to include sidebearings when metrics are present', () => {
+    const letterBounds = { min: { x: 120, y: 0, z: 0 }, max: { x: 320, y: 10, z: 5 } };
+    const metrics = { leftSideBearing: 120, rightSideBearing: 60, xMin: 120 };
+    const result = internals.computeSlugBounds(letterBounds, metrics, 380, 1000, 1000);
+    assert.deepStrictEqual(result, { minX: 0, width: 380 });
+});
+
+test('computeSlugBounds preserves overhangs when bearings are negative', () => {
+    const letterBounds = { min: { x: -30, y: 0, z: 0 }, max: { x: 420, y: 10, z: 5 } };
+    const metrics = { leftSideBearing: -30, rightSideBearing: 40, xMin: -30 };
+    const result = internals.computeSlugBounds(letterBounds, metrics, 460, 1000, 1000);
+    assert.deepStrictEqual(result, { minX: -30, width: 490 });
+});
+
+test('computeSlugBounds returns null when required inputs are missing', () => {
+    const letterBounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 100, y: 10, z: 5 } };
+    assert.strictEqual(internals.computeSlugBounds(letterBounds, null, 400, 1000, 1000), null);
+    assert.strictEqual(internals.computeSlugBounds(null, {}, 400, 1000, 1000), null);
+});

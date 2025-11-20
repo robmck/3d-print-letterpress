@@ -52,8 +52,31 @@ function run(argv) {
                     console.warn("Skipping glyph '" + (glyphs[a].name || glyphs[a].index) + "' due to empty geometry.");
                     continue;
                 }
+                var letterBounds = getModelBoundingBox(model);
+                if (!letterBounds) {
+                    console.warn("Skipping glyph '" + (glyphs[a].name || glyphs[a].index) + "' due to missing bounding box.");
+                    continue;
+                }
                 var glyphName = formatGlyphName(glyphs[a]);
-                writeTypeSTLForModel(model, capTopZ, path.basename(file, ext), glyphName, pointsize);
+                var metrics = typeof glyphs[a].getMetrics === 'function' ? glyphs[a].getMetrics() : null;
+                var slugBounds = computeSlugBounds(
+                    letterBounds,
+                    metrics,
+                    glyphs[a].advanceWidth,
+                    font.unitsPerEm,
+                    pointsize
+                );
+                writeTypeSTLForModel(
+                    model,
+                    capTopZ,
+                    path.basename(file, ext),
+                    glyphName,
+                    pointsize,
+                    {
+                        letterBounds: letterBounds,
+                        slugBounds: slugBounds
+                    }
+                );
             }
         });
     }
@@ -121,32 +144,41 @@ maxHeightZ - the maximum z coordinate of the typeface's bounding box (i.e. highe
 faceName - the name of the typeface (ex. Gotham-Book)
 glyphName - the name of the glyph (ex. A)
 */
-function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPointSize) {
-    var bboxdims = getModelBoundingBox(model);
+function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPointSize, options) {
+    var resolvedOptions = options || {};
+    var bboxdims = resolvedOptions.letterBounds || getModelBoundingBox(model);
     if (!bboxdims) {
         console.warn("Skipping glyph '" + glyphName + "' due to missing bounding box.");
         return;
     }
     
-    var bboxWidthX = bboxdims.max.x - bboxdims.min.x;
+    var slugWidthX = bboxdims.max.x - bboxdims.min.x;
+    var slugMinX = bboxdims.min.x;
+    if (resolvedOptions.slugBounds && typeof resolvedOptions.slugBounds.width === 'number' && resolvedOptions.slugBounds.width > 0) {
+        slugWidthX = resolvedOptions.slugBounds.width;
+    }
+    if (resolvedOptions.slugBounds && typeof resolvedOptions.slugBounds.minX === 'number') {
+        slugMinX = resolvedOptions.slugBounds.minX;
+    }
+    var baseCenterX = slugMinX + slugWidthX / 2;
 
     var typeHigh = 0.918 * 72;
     var faceHeight = 2;
     var topPadding = 0.5;
-    var base = JSM.GenerateCuboid(bboxWidthX, typeHigh - faceHeight, outputPointSize);
+    var base = JSM.GenerateCuboid(slugWidthX, typeHigh - faceHeight, outputPointSize);
 
     var alignBaseToLetter = JSM.TranslationTransformation (
         new JSM.Coord (
-            bboxdims.min.x + bboxWidthX / 2,
+            baseCenterX,
             bboxdims.max.y - (typeHigh / 2) - (faceHeight / 2),
             maxHeightZ - outputPointSize / 2 + topPadding
         ));
     base.Transform (alignBaseToLetter);
 
-    var nick = JSM.GenerateCylinder(faceHeight, bboxWidthX, 50, true, true);
+    var nick = JSM.GenerateCylinder(faceHeight, slugWidthX, 50, true, true);
     nick.Transform(JSM.RotationYTransformation(Math.PI/2));
     var alignNickToBase = new JSM.Coord (
-            bboxdims.min.x + bboxWidthX / 2,
+            baseCenterX,
             bboxdims.max.y - (3 * typeHigh / 4),
             maxHeightZ - outputPointSize
         );
@@ -232,6 +264,34 @@ function estimateCapHeight(font, size) {
     return heights.reduce(function(previousValue, currentValue) {
         return Math.max(previousValue, currentValue);
     }, heights[0]);
+}
+
+function computeSlugBounds(letterBounds, glyphMetrics, advanceWidth, unitsPerEm, pointSize) {
+    if (!letterBounds || !glyphMetrics || typeof advanceWidth !== 'number' || !unitsPerEm || !pointSize) {
+        return null;
+    }
+
+    var scale = pointSize / unitsPerEm;
+    if (!isFinite(scale) || scale <= 0) {
+        return null;
+    }
+
+    var scaledAdvance = advanceWidth * scale;
+    var rawXMin = typeof glyphMetrics.xMin === 'number'
+        ? glyphMetrics.xMin
+        : (typeof glyphMetrics.leftSideBearing === 'number' ? glyphMetrics.leftSideBearing : 0);
+    var glyphOriginX = letterBounds.min.x - (rawXMin * scale);
+    var slugLeft = Math.min(letterBounds.min.x, glyphOriginX);
+    var slugRight = Math.max(letterBounds.max.x, glyphOriginX + scaledAdvance);
+
+    if (!isFinite(slugLeft) || !isFinite(slugRight) || slugRight <= slugLeft) {
+        return null;
+    }
+
+    return {
+        minX: slugLeft,
+        width: slugRight - slugLeft
+    };
 }
 
 function formatGlyphName(glyph) {
@@ -386,6 +446,7 @@ module.exports = {
         mapSvgCommand: mapSvgCommand,
         convertSvgPathToCommands: convertSvgPathToCommands,
         mergeModels: mergeModels,
-        getModelBoundingBox: getModelBoundingBox
+        getModelBoundingBox: getModelBoundingBox,
+        computeSlugBounds: computeSlugBounds
     }
 };
