@@ -349,7 +349,7 @@ function computeSlugBounds(letterBounds, glyphMetrics, advanceWidth, unitsPerEm,
 
 function extractFontVerticalMetrics(font) {
     if (!font) {
-        return { ascender: null, descender: null };
+        return { ascender: null, descender: null, lineGap: 0 };
     }
     var tables = font.tables || {};
     var os2 = tables.os2 || {};
@@ -358,26 +358,48 @@ function extractFontVerticalMetrics(font) {
 
     var ascender = null;
     var descender = null;
+    var lineGap = 0;
 
     var fsSelection = typeof os2.fsSelection === 'number' ? os2.fsSelection : null;
     var useTypoMetrics = !!(fsSelection && (fsSelection & 0x80));
     var hasTypo = typeof os2.sTypoAscender === 'number' && typeof os2.sTypoDescender === 'number';
     var hasWin = typeof os2.usWinAscent === 'number' && typeof os2.usWinDescent === 'number';
 
-    if (hasTypo || hasWin) {
-        if (useTypoMetrics && hasTypo) {
-            ascender = os2.sTypoAscender;
-            descender = os2.sTypoDescender;
-        } else if (!useTypoMetrics && hasWin) {
-            ascender = os2.usWinAscent;
-            descender = -os2.usWinDescent;
-        } else if (hasTypo) {
-            ascender = os2.sTypoAscender;
-            descender = os2.sTypoDescender;
-        } else if (hasWin) {
-            ascender = os2.usWinAscent;
-            descender = -os2.usWinDescent;
+    function setMetrics(source, asc, desc, gap) {
+        if (typeof asc !== 'number' || typeof desc !== 'number') {
+            return false;
         }
+        ascender = asc;
+        descender = desc;
+        if (source === 'typo') {
+            lineGap = typeof gap === 'number' ? gap : 0;
+        } else if (source === 'hhea') {
+            lineGap = typeof gap === 'number' ? gap : 0;
+        } else {
+            lineGap = 0;
+        }
+        return true;
+    }
+
+    var metricsResolved = false;
+
+    if (!metricsResolved && useTypoMetrics && hasTypo) {
+        metricsResolved = setMetrics('typo', os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap);
+    }
+    if (!metricsResolved && !useTypoMetrics && hasWin) {
+        metricsResolved = setMetrics('win', os2.usWinAscent, -os2.usWinDescent, 0);
+    }
+    if (!metricsResolved && hasTypo) {
+        metricsResolved = setMetrics('typo', os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap);
+    }
+    if (!metricsResolved && hasWin) {
+        metricsResolved = setMetrics('win', os2.usWinAscent, -os2.usWinDescent, 0);
+    }
+    if (!metricsResolved && typeof hhea.ascender === 'number' && typeof hhea.descender === 'number') {
+        metricsResolved = setMetrics('hhea', hhea.ascender, hhea.descender, hhea.lineGap);
+    }
+    if (!metricsResolved && typeof head.yMax === 'number' && typeof head.yMin === 'number') {
+        metricsResolved = setMetrics('head', head.yMax, head.yMin, 0);
     }
 
     if (ascender === null && typeof hhea.ascender === 'number') {
@@ -386,7 +408,6 @@ function extractFontVerticalMetrics(font) {
     if (descender === null && typeof hhea.descender === 'number') {
         descender = hhea.descender;
     }
-
     if (ascender === null && typeof head.yMax === 'number') {
         ascender = head.yMax;
     }
@@ -396,7 +417,8 @@ function extractFontVerticalMetrics(font) {
 
     return {
         ascender: ascender,
-        descender: descender
+        descender: descender,
+        lineGap: lineGap
     };
 }
 
@@ -411,10 +433,11 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds, options) {
 
     var vertical = extractFontVerticalMetrics(font);
     var metricsRange = null;
+    var lineGap = vertical && typeof vertical.lineGap === 'number' ? vertical.lineGap : 0;
     if (options && typeof options.metricsRange === 'number' && options.metricsRange > 0) {
         metricsRange = options.metricsRange;
     } else if (vertical && typeof vertical.ascender === 'number' && typeof vertical.descender === 'number') {
-        var derivedRange = vertical.ascender - vertical.descender;
+        var derivedRange = vertical.ascender - vertical.descender + lineGap;
         if (isFinite(derivedRange) && derivedRange > 0) {
             metricsRange = derivedRange;
         }
@@ -430,8 +453,9 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds, options) {
         return null;
     }
 
-    var top = typeof vertical.ascender === 'number' ? vertical.ascender * scale : null;
-    var bottom = typeof vertical.descender === 'number' ? vertical.descender * scale : null;
+    var lineGapOffset = (lineGap * scale) / 2;
+    var top = typeof vertical.ascender === 'number' ? (vertical.ascender * scale) + lineGapOffset : null;
+    var bottom = typeof vertical.descender === 'number' ? (vertical.descender * scale) - lineGapOffset : null;
 
     if (glyphBounds) {
         if (top === null) {
@@ -465,7 +489,8 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds, options) {
 
 function getScalingRangeForFont(verticalMetrics, fallbackUnitsPerEm) {
     if (verticalMetrics && typeof verticalMetrics.ascender === 'number' && typeof verticalMetrics.descender === 'number') {
-        var range = verticalMetrics.ascender - verticalMetrics.descender;
+        var lineGap = typeof verticalMetrics.lineGap === 'number' ? verticalMetrics.lineGap : 0;
+        var range = verticalMetrics.ascender - verticalMetrics.descender + lineGap;
         if (isFinite(range) && range > 0) {
             return range;
         }
@@ -656,6 +681,7 @@ module.exports = {
         getModelBoundingBox: getModelBoundingBox,
         computeSlugBounds: computeSlugBounds,
         computeFontVerticalMetrics: computeFontVerticalMetrics,
+        getScalingRangeForFont: getScalingRangeForFont,
         applyUniformScale: applyUniformScale,
         createUniformScaleTransformation: createUniformScaleTransformation,
         POINT_TO_MM: POINT_TO_MM

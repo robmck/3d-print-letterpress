@@ -115,6 +115,25 @@ test('computeFontVerticalMetrics honors USE_TYPO_METRICS bit from OS/2', () => {
     );
 });
 
+test('computeFontVerticalMetrics splits OS/2 sTypo line gap evenly', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            os2: {
+                fsSelection: 0x80,
+                sTypoAscender: 800,
+                sTypoDescender: -200,
+                sTypoLineGap: 200
+            }
+        }
+    };
+    const pointSize = 96;
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null);
+    assertApproxEqual(metrics.height, 96);
+    assertApproxEqual(metrics.top, 72);
+    assertApproxEqual(metrics.bottom, -24);
+});
+
 test('computeFontVerticalMetrics uses usWin metrics when USE_TYPO_METRICS is unset', () => {
     const font = {
         unitsPerEm: 1000,
@@ -163,6 +182,20 @@ test('computeFontVerticalMetrics falls back to hhea ascender/descender when OS/2
     );
 });
 
+test('computeFontVerticalMetrics uses hhea line gap when present', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            hhea: { ascender: 700, descender: -300, lineGap: 100 }
+        }
+    };
+    const pointSize = 55;
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null);
+    assertApproxEqual(metrics.height, pointSize);
+    assertApproxEqual(metrics.top, 37.5);
+    assertApproxEqual(metrics.bottom, -17.5);
+});
+
 test('computeFontVerticalMetrics falls back to head yMax/yMin when hhea missing', () => {
     const font = {
         unitsPerEm: 1000,
@@ -205,6 +238,11 @@ test('computeFontVerticalMetrics extends to glyph bounds when outlines exceed me
     const bounds = { minZ: -15, maxZ: 55 };
     const metrics = internals.computeFontVerticalMetrics(font, 48, bounds);
     assert.deepStrictEqual(metrics, { top: 55, bottom: -15, height: 70 });
+});
+
+test('getScalingRangeForFont includes line gap when provided', () => {
+    const range = internals.getScalingRangeForFont({ ascender: 700, descender: -300, lineGap: 200 }, 1000);
+    assert.strictEqual(range, 1200);
 });
 
 test('applyUniformScale transforms all bodies with a uniform matrix', () => {
