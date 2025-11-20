@@ -3,6 +3,17 @@ const assert = require('node:assert');
 
 const mainModule = require('../src/main');
 const internals = mainModule._internals;
+const EPSILON = 1e-9;
+
+function assertApproxEqual(actual, expected, epsilon = EPSILON) {
+    assert.ok(Math.abs(actual - expected) < epsilon, `expected ${expected} but received ${actual}`);
+}
+
+function assertVerticalMetricsClose(metrics, expectedTop, expectedBottom, expectedHeight) {
+    assertApproxEqual(metrics.top, expectedTop);
+    assertApproxEqual(metrics.bottom, expectedBottom);
+    assertApproxEqual(metrics.height, expectedHeight);
+}
 
 test('dedupe removes repeated characters while preserving order', () => {
     assert.strictEqual(internals.dedupe('AABBCCAA'), 'ABC');
@@ -90,9 +101,18 @@ test('computeFontVerticalMetrics honors USE_TYPO_METRICS bit from OS/2', () => {
             }
         }
     };
-    const bounds = { minZ: -10, maxZ: 30 };
-    const metrics = internals.computeFontVerticalMetrics(font, 60, bounds);
-    assert.deepStrictEqual(metrics, { top: 54, bottom: -12, height: 66 });
+    const pointSize = 60;
+    const ascender = 900;
+    const descender = -200;
+    const span = ascender - descender;
+    const scale = pointSize / span;
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null);
+    assertVerticalMetricsClose(
+        metrics,
+        ascender * scale,
+        descender * scale,
+        pointSize
+    );
 });
 
 test('computeFontVerticalMetrics uses usWin metrics when USE_TYPO_METRICS is unset', () => {
@@ -108,9 +128,18 @@ test('computeFontVerticalMetrics uses usWin metrics when USE_TYPO_METRICS is uns
             }
         }
     };
-    const bounds = { minZ: -20, maxZ: 50 };
-    const metrics = internals.computeFontVerticalMetrics(font, 50, bounds);
-    assert.deepStrictEqual(metrics, { top: 55, bottom: -22.5, height: 77.5 });
+    const pointSize = 50;
+    const ascender = 1100;
+    const descender = -450;
+    const span = ascender - descender;
+    const scale = pointSize / span;
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null);
+    assertVerticalMetricsClose(
+        metrics,
+        ascender * scale,
+        descender * scale,
+        pointSize
+    );
 });
 
 test('computeFontVerticalMetrics falls back to hhea ascender/descender when OS/2 missing', () => {
@@ -120,8 +149,18 @@ test('computeFontVerticalMetrics falls back to hhea ascender/descender when OS/2
             hhea: { ascender: 800, descender: -300 }
         }
     };
-    const metrics = internals.computeFontVerticalMetrics(font, 40, null);
-    assert.deepStrictEqual(metrics, { top: 32, bottom: -12, height: 44 });
+    const pointSize = 40;
+    const ascender = 800;
+    const descender = -300;
+    const span = ascender - descender;
+    const scale = pointSize / span;
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null);
+    assertVerticalMetricsClose(
+        metrics,
+        ascender * scale,
+        descender * scale,
+        pointSize
+    );
 });
 
 test('computeFontVerticalMetrics falls back to head yMax/yMin when hhea missing', () => {
@@ -131,8 +170,18 @@ test('computeFontVerticalMetrics falls back to head yMax/yMin when hhea missing'
             head: { yMax: 700, yMin: -200 }
         }
     };
-    const metrics = internals.computeFontVerticalMetrics(font, 10, null);
-    assert.deepStrictEqual(metrics, { top: 7, bottom: -2, height: 9 });
+    const pointSize = 10;
+    const ascender = 700;
+    const descender = -200;
+    const span = ascender - descender;
+    const scale = pointSize / span;
+    const metrics = internals.computeFontVerticalMetrics(font, pointSize, null);
+    assertVerticalMetricsClose(
+        metrics,
+        ascender * scale,
+        descender * scale,
+        pointSize
+    );
 });
 
 test('computeFontVerticalMetrics falls back to glyph bounds when metrics missing', () => {
@@ -140,4 +189,43 @@ test('computeFontVerticalMetrics falls back to glyph bounds when metrics missing
     const bounds = { minZ: -5, maxZ: 32 };
     const metrics = internals.computeFontVerticalMetrics(font, 72, bounds);
     assert.deepStrictEqual(metrics, { top: 32, bottom: -5, height: 37 });
+});
+
+test('computeFontVerticalMetrics extends to glyph bounds when outlines exceed metrics', () => {
+    const font = {
+        unitsPerEm: 1000,
+        tables: {
+            os2: {
+                fsSelection: 0x80,
+                sTypoAscender: 800,
+                sTypoDescender: -200
+            }
+        }
+    };
+    const bounds = { minZ: -15, maxZ: 55 };
+    const metrics = internals.computeFontVerticalMetrics(font, 48, bounds);
+    assert.deepStrictEqual(metrics, { top: 55, bottom: -15, height: 70 });
+});
+
+test('applyUniformScale transforms all bodies with a uniform matrix', () => {
+    const transformedMatrices = [];
+    const body = {
+        Transform: (transform) => {
+            transformedMatrices.push(transform.GetMatrix().slice());
+        }
+    };
+    const model = {
+        BodyCount: () => 2,
+        GetBody: () => body
+    };
+
+    internals.applyUniformScale(model, internals.POINT_TO_MM);
+
+    assert.strictEqual(transformedMatrices.length, 2);
+    transformedMatrices.forEach((matrix) => {
+        assertApproxEqual(matrix[0], internals.POINT_TO_MM);
+        assertApproxEqual(matrix[5], internals.POINT_TO_MM);
+        assertApproxEqual(matrix[10], internals.POINT_TO_MM);
+        assert.strictEqual(matrix[15], 1);
+    });
 });

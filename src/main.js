@@ -8,6 +8,9 @@ var parseSVG = require('svg-path-parser').parseSVG;
 var JSM = require("../lib/jsmodeler.js");
 var segmentElem = require("../lib/segmentelem.js");
 var ContourPolygonToPrisms = require("../lib/contourpolygontoprisms.js");
+var MILLIMETERS_PER_INCH = 25.4;
+var POINTS_PER_INCH = 72;
+var POINT_TO_MM = MILLIMETERS_PER_INCH / POINTS_PER_INCH;
 
 function run(argv) {
     var args = Array.isArray(argv) ? argv.slice() : process.argv.slice(2);
@@ -38,13 +41,18 @@ function run(argv) {
                 console.error("No glyphs found for character set '" + ch + "'.");
                 return;
             }
+            var baseVerticalMetrics = extractFontVerticalMetrics(font);
+            var unitsPerEm = font.unitsPerEm || 1000;
+            var scalingRange = getScalingRangeForFont(baseVerticalMetrics, unitsPerEm);
+            var glyphScale = scalingRange > 0 ? (pointsize / scalingRange) : (pointsize / unitsPerEm);
+            var glyphRenderSize = glyphScale * unitsPerEm;
 
-            var capTopZ = estimateCapHeight(font, pointsize);
+            var capTopZ = estimateCapHeight(font, glyphRenderSize);
             var preparedGlyphs = [];
             var aggregatedLetterBounds = null;
 
             for (var a = 0, b = glyphs.length; a < b; a++) {
-                var glyphPath = glyphs[a].getPath(0, 0, pointsize);
+                var glyphPath = glyphs[a].getPath(0, 0, glyphRenderSize);
                 if (!glyphPath || !glyphPath.commands || glyphPath.commands.length === 0) {
                     console.warn("Skipping glyph '" + (glyphs[a].name || glyphs[a].index) + "' with no outlines.");
                     continue;
@@ -66,7 +74,7 @@ function run(argv) {
                     metrics,
                     glyphs[a].advanceWidth,
                     font.unitsPerEm,
-                    pointsize
+                    glyphRenderSize
                 );
                 preparedGlyphs.push({
                     model: model,
@@ -91,7 +99,9 @@ function run(argv) {
                 return;
             }
 
-            var verticalMetrics = computeFontVerticalMetrics(font, pointsize, aggregatedLetterBounds);
+            var verticalMetrics = computeFontVerticalMetrics(font, pointsize, aggregatedLetterBounds, {
+                metricsRange: scalingRange
+            });
 
             for (var entryIndex = 0; entryIndex < preparedGlyphs.length; entryIndex++) {
                 var entry = preparedGlyphs[entryIndex];
@@ -238,6 +248,8 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPoin
     for (var n = 0, bodies = model.BodyCount(); n < bodies; n++) {
         model.GetBody(n).Transform(rotateUpright);
     }
+
+    applyUniformScale(model, POINT_TO_MM);
 
     var stl = JSM.ExportModelToStl(model);
 
@@ -388,7 +400,7 @@ function extractFontVerticalMetrics(font) {
     };
 }
 
-function computeFontVerticalMetrics(font, pointSize, glyphBounds) {
+function computeFontVerticalMetrics(font, pointSize, glyphBounds, options) {
     if (!font || !pointSize) {
         return null;
     }
@@ -396,12 +408,28 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds) {
     if (!unitsPerEm || !isFinite(unitsPerEm)) {
         return null;
     }
-    var scale = pointSize / unitsPerEm;
+
+    var vertical = extractFontVerticalMetrics(font);
+    var metricsRange = null;
+    if (options && typeof options.metricsRange === 'number' && options.metricsRange > 0) {
+        metricsRange = options.metricsRange;
+    } else if (vertical && typeof vertical.ascender === 'number' && typeof vertical.descender === 'number') {
+        var derivedRange = vertical.ascender - vertical.descender;
+        if (isFinite(derivedRange) && derivedRange > 0) {
+            metricsRange = derivedRange;
+        }
+    }
+
+    var scale;
+    if (metricsRange) {
+        scale = pointSize / metricsRange;
+    } else {
+        scale = pointSize / unitsPerEm;
+    }
     if (!isFinite(scale) || scale <= 0) {
         return null;
     }
 
-    var vertical = extractFontVerticalMetrics(font);
     var top = typeof vertical.ascender === 'number' ? vertical.ascender * scale : null;
     var bottom = typeof vertical.descender === 'number' ? vertical.descender * scale : null;
 
@@ -433,6 +461,44 @@ function computeFontVerticalMetrics(font, pointSize, glyphBounds) {
         bottom: bottom,
         height: height
     };
+}
+
+function getScalingRangeForFont(verticalMetrics, fallbackUnitsPerEm) {
+    if (verticalMetrics && typeof verticalMetrics.ascender === 'number' && typeof verticalMetrics.descender === 'number') {
+        var range = verticalMetrics.ascender - verticalMetrics.descender;
+        if (isFinite(range) && range > 0) {
+            return range;
+        }
+    }
+    var unitsPerEm = fallbackUnitsPerEm || 1000;
+    return unitsPerEm > 0 ? unitsPerEm : 1000;
+}
+
+function createUniformScaleTransformation(scale) {
+    if (!isFinite(scale) || scale <= 0) {
+        return null;
+    }
+    var transform = new JSM.Transformation();
+    transform.SetMatrix([
+        scale, 0, 0, 0,
+        0, scale, 0, 0,
+        0, 0, scale, 0,
+        0, 0, 0, 1
+    ]);
+    return transform;
+}
+
+function applyUniformScale(model, scale) {
+    if (!model || typeof model.BodyCount !== 'function') {
+        return;
+    }
+    var transform = createUniformScaleTransformation(scale);
+    if (!transform) {
+        return;
+    }
+    for (var n = 0, bodies = model.BodyCount(); n < bodies; n++) {
+        model.GetBody(n).Transform(transform);
+    }
 }
 
 function formatGlyphName(glyph) {
@@ -589,6 +655,9 @@ module.exports = {
         mergeModels: mergeModels,
         getModelBoundingBox: getModelBoundingBox,
         computeSlugBounds: computeSlugBounds,
-        computeFontVerticalMetrics: computeFontVerticalMetrics
+        computeFontVerticalMetrics: computeFontVerticalMetrics,
+        applyUniformScale: applyUniformScale,
+        createUniformScaleTransformation: createUniformScaleTransformation,
+        POINT_TO_MM: POINT_TO_MM
     }
 };
