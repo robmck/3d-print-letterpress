@@ -20,18 +20,29 @@ test('dedupe removes repeated characters while preserving order', () => {
     assert.strictEqual(internals.dedupe('xyz'), 'xyz');
 });
 
-test('extractLineGapOption parses inline and spaced arguments', () => {
-    const inline = internals.extractLineGapOption(['--line-gap=120', 'font.otf']);
+test('extractOverrideOptions parses line gap and type high arguments', () => {
+    const inline = internals.extractOverrideOptions(['--line-gap=120', '--type-high=us', 'font.otf']);
     assert.strictEqual(inline.lineGap, 120);
+    assertApproxEqual(inline.typeHigh, internals.DEFAULT_US_TYPE_HIGH_POINTS);
     assert.deepStrictEqual(inline.filteredArgs, ['font.otf']);
 
-    const spaced = internals.extractLineGapOption(['--line-gap', '300', 'font.ttf']);
+    const spaced = internals.extractOverrideOptions(['--line-gap', '300', '--type-high', '23.5mm', 'font.ttf']);
     assert.strictEqual(spaced.lineGap, 300);
+    assertApproxEqual(spaced.typeHigh, 23.5 / internals.POINT_TO_MM);
     assert.deepStrictEqual(spaced.filteredArgs, ['font.ttf']);
 
-    const invalid = internals.extractLineGapOption(['--line-gap', 'NaN', 'font.ttf']);
+    const invalid = internals.extractOverrideOptions(['--line-gap', 'NaN', '--type-high', 'bogus', 'font.ttf']);
     assert.strictEqual(invalid.lineGap, null);
+    assert.strictEqual(invalid.typeHigh, null);
     assert.deepStrictEqual(invalid.filteredArgs, ['font.ttf']);
+});
+
+test('parse type high options accepts euro shorthand and inch defaults', () => {
+    const preset = internals.extractOverrideOptions(['--type-high=euro']);
+    assertApproxEqual(preset.typeHigh, internals.millimetersToPoints(23.55));
+
+    const assumedInches = internals.extractOverrideOptions(['--type-high', '0.94']);
+    assertApproxEqual(assumedInches.typeHigh, internals.inchesToPoints(0.94));
 });
 
 test('getModelBoundingBox merges bounding boxes across bodies', () => {

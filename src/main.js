@@ -11,11 +11,15 @@ var ContourPolygonToPrisms = require("../lib/contourpolygontoprisms.js");
 var MILLIMETERS_PER_INCH = 25.4;
 var POINTS_PER_INCH = 72;
 var POINT_TO_MM = MILLIMETERS_PER_INCH / POINTS_PER_INCH;
+var DEFAULT_US_TYPE_HIGH_INCHES = 0.918;
+var EURO_TYPE_HIGH_MM = 23.55;
+var DEFAULT_US_TYPE_HIGH_POINTS = DEFAULT_US_TYPE_HIGH_INCHES * POINTS_PER_INCH;
 
 function run(argv) {
     var args = Array.isArray(argv) ? argv.slice() : process.argv.slice(2);
-    var parsedOptions = extractLineGapOption(args);
+    var parsedOptions = extractOverrideOptions(args);
     var lineGapOverride = parsedOptions.lineGap;
+    var typeHighOverride = parsedOptions.typeHigh;
     args = parsedOptions.filteredArgs;
 
     var file = args[0];
@@ -26,7 +30,7 @@ function run(argv) {
     var ch = args[2] ? dedupe(args[2]) : 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
     if (args.length === 0) {
-        console.log("Usage: 3d-print-letterpress type-file [point-size [glyphs]] [--line-gap=value]");
+        console.log("Usage: 3d-print-letterpress type-file [point-size [glyphs]] [--line-gap=value] [--type-high=value]");
         console.log("Usage: 3d-print-letterpress svg-file");
         return;
     }
@@ -57,6 +61,10 @@ function run(argv) {
             }, unitsPerEm);
             var glyphScale = scalingRange > 0 ? (pointsize / scalingRange) : (pointsize / unitsPerEm);
             var glyphRenderSize = glyphScale * unitsPerEm;
+
+                var resolvedTypeHigh = typeof typeHighOverride === 'number' && isFinite(typeHighOverride) && typeHighOverride > 0
+                    ? typeHighOverride
+                    : DEFAULT_US_TYPE_HIGH_POINTS;
 
             var capTopZ = estimateCapHeight(font, glyphRenderSize);
             var preparedGlyphs = [];
@@ -127,7 +135,8 @@ function run(argv) {
                     {
                         letterBounds: entry.letterBounds,
                         slugBounds: entry.slugBounds,
-                        verticalMetrics: verticalMetrics
+                        verticalMetrics: verticalMetrics,
+                        typeHigh: resolvedTypeHigh
                     }
                 );
             }
@@ -226,9 +235,11 @@ function writeTypeSTLForModel(model, maxHeightZ, faceName, glyphName, outputPoin
         ? verticalMetrics.bottom
         : (slugTop - slugHeight);
 
-    var typeHigh = 0.918 * 72;
+    var typeHigh = resolvedOptions.typeHigh && resolvedOptions.typeHigh > 0
+        ? resolvedOptions.typeHigh
+        : DEFAULT_US_TYPE_HIGH_POINTS;
     var faceHeight = 2;
-    var topPadding = 0.5;
+    var topPadding = 0;
     var base = JSM.GenerateCuboid(slugWidthX, typeHigh - faceHeight, slugHeight);
 
     var alignBaseToLetter = JSM.TranslationTransformation (
@@ -685,10 +696,53 @@ function dedupe(s) {
     return firsts;
 }
 
-function extractLineGapOption(args) {
+function inchesToPoints(value) {
+    return value * POINTS_PER_INCH;
+}
+
+function millimetersToPoints(value) {
+    return (value / MILLIMETERS_PER_INCH) * POINTS_PER_INCH;
+}
+
+function parseTypeHighToken(token) {
+    if (typeof token === 'number' && isFinite(token)) {
+        return token > 0 ? inchesToPoints(token) : null;
+    }
+    if (typeof token !== 'string') {
+        return null;
+    }
+    var normalized = token.trim().toLowerCase();
+    if (!normalized) {
+        return null;
+    }
+    if (normalized === 'us') {
+        return DEFAULT_US_TYPE_HIGH_POINTS;
+    }
+    if (normalized === 'euro') {
+        return millimetersToPoints(EURO_TYPE_HIGH_MM);
+    }
+
+    var unitMatch = normalized.match(/(mm|in)$/);
+    var unit = unitMatch ? unitMatch[1] : null;
+    var numericPortion = unit ? normalized.slice(0, -unit.length).trim() : normalized;
+    var numericValue = parseFloat(numericPortion);
+    if (!isFinite(numericValue) || numericValue <= 0) {
+        return null;
+    }
+    if (!unit || unit === 'in') {
+        return inchesToPoints(numericValue);
+    }
+    if (unit === 'mm') {
+        return millimetersToPoints(numericValue);
+    }
+    return null;
+}
+
+function extractOverrideOptions(args) {
     var result = {
         filteredArgs: [],
-        lineGap: null
+        lineGap: null,
+        typeHigh: null
     };
     if (!Array.isArray(args)) {
         return result;
@@ -714,6 +768,26 @@ function extractLineGapOption(args) {
             }
             continue;
         }
+
+        if (typeof current === 'string' && current.indexOf('--type-high') === 0) {
+            var typeHighToken = null;
+            var typeEqualsIndex = current.indexOf('=');
+            if (typeEqualsIndex !== -1) {
+                typeHighToken = current.substring(typeEqualsIndex + 1);
+            } else if (i + 1 < args.length) {
+                typeHighToken = args[i + 1];
+                i++;
+            }
+
+            if (typeHighToken !== null && typeHighToken.length > 0) {
+                var parsedTypeHigh = parseTypeHighToken(typeHighToken);
+                if (typeof parsedTypeHigh === 'number') {
+                    result.typeHigh = parsedTypeHigh;
+                }
+            }
+            continue;
+        }
+
         result.filteredArgs.push(current);
     }
 
@@ -735,9 +809,12 @@ module.exports = {
         computeSlugBounds: computeSlugBounds,
         computeFontVerticalMetrics: computeFontVerticalMetrics,
         getScalingRangeForFont: getScalingRangeForFont,
-        extractLineGapOption: extractLineGapOption,
+        extractOverrideOptions: extractOverrideOptions,
         applyUniformScale: applyUniformScale,
         createUniformScaleTransformation: createUniformScaleTransformation,
+        DEFAULT_US_TYPE_HIGH_POINTS: DEFAULT_US_TYPE_HIGH_POINTS,
+        millimetersToPoints: millimetersToPoints,
+        inchesToPoints: inchesToPoints,
         POINT_TO_MM: POINT_TO_MM
     }
 };
